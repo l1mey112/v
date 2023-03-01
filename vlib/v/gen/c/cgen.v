@@ -25,7 +25,7 @@ const (
 		'long', 'malloc', 'namespace', 'new', 'nil', 'panic', 'register', 'restrict', 'return',
 		'short', 'signed', 'sizeof', 'static', 'string', 'struct', 'switch', 'typedef', 'typename',
 		'union', 'unix', 'unsigned', 'void', 'volatile', 'while', 'template', 'true', 'small',
-		'stdout', 'stdin', 'stderr', 'far', 'near', 'huge']
+		'stdout', 'stdin', 'stderr', 'far', 'near', 'huge', 'requires']
 	c_reserved_chk = token.new_keywords_matcher_from_array_trie(c_reserved)
 	// same order as in token.Kind
 	cmp_str        = ['eq', 'ne', 'gt', 'lt', 'ge', 'le']
@@ -2993,7 +2993,6 @@ fn (mut g Gen) map_fn_ptrs(key_typ ast.TypeSymbol) (string, string, string, stri
 }
 
 fn (mut g Gen) expr(node_ ast.Expr) {
-	// println('cgen expr() line_nr=$node.pos.line_nr')
 	old_discard_or_result := g.discard_or_result
 	old_is_void_expr_stmt := g.is_void_expr_stmt
 	if g.is_void_expr_stmt {
@@ -3033,9 +3032,6 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 			g.write(node.val.str())
 		}
 		ast.CallExpr {
-			// if g.fileis('1.strings') {
-			// println('\ncall_expr()()')
-			// }
 			ret_type := if node.or_block.kind == .absent {
 				node.return_type
 			} else {
@@ -3056,11 +3052,8 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 			}
 			last_stmt_pos := if g.stmt_path_pos.len > 0 { g.stmt_path_pos.last() } else { 0 }
 			g.call_expr(node)
-			// if g.fileis('1.strings') {
-			// println('before:' + node.autofree_pregen)
-			// }
 			if g.is_autofree && !g.is_builtin_mod && !g.is_js_call && g.strs_to_free0.len == 0
-				&& !g.inside_lambda { // && g.inside_ternary ==
+				&& !g.inside_lambda {
 				// if len != 0, that means we are handling call expr inside call expr (arg)
 				// and it'll get messed up here, since it's handled recursively in autofree_call_pregen()
 				// so just skip it
@@ -3069,12 +3062,10 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 					g.insert_at(last_stmt_pos, g.strs_to_free0.join('\n') + '/* inserted before */')
 				}
 				g.strs_to_free0 = []
-				// println('pos=$node.pos.pos')
 			}
 			if g.is_shared && !ret_type.has_flag(.shared_f) && !g.inside_or_block {
 				g.writeln('}, sizeof(${shared_styp}))')
 			}
-			// if g.autofree && node.autofree_pregen != '' { // g.strs_to_free0.len != 0 {
 			/*
 			if g.autofree {
 				s := g.autofree_pregen[node.pos.pos.str()]
@@ -3120,7 +3111,6 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 			g.concat_expr(node)
 		}
 		ast.CTempVar {
-			// g.write('/*ctmp .orig: $node.orig.str() , ._typ: $node.typ, .is_ptr: $node.is_ptr */ ')
 			g.write(node.name)
 		}
 		ast.DumpExpr {
@@ -3168,7 +3158,7 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 				g.write('-0')
 				g.write(node.val[3..])
 			} else {
-				g.write(node.val) // .int().str())
+				g.write(node.val)
 			}
 		}
 		ast.IsRefType {
@@ -3282,11 +3272,9 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 					}
 				}
 			} else {
-				// g.write('/*pref*/')
 				if !(g.is_amp && node.right.is_auto_deref_var()) {
 					g.write(node.op.str())
 				}
-				// g.write('(')
 				g.expr(node.right)
 			}
 			g.is_amp = false
@@ -3326,12 +3314,9 @@ fn (mut g Gen) expr(node_ ast.Expr) {
 		}
 		ast.TypeNode {
 			// match sum Type
-			// g.write('/* Type */')
-			// type_idx := node.typ.idx()
 			typ := g.unwrap_generic(node.typ)
 			sym := g.table.sym(typ)
 			sidx := g.type_sidx(typ)
-			// g.write('$type_idx /* $sym.name */')
 			g.write('${sidx} /* ${sym.name} */')
 		}
 		ast.TypeOf {
@@ -3492,7 +3477,7 @@ fn (mut g Gen) selector_expr(node ast.SelectorExpr) {
 		&& (node.expr_type.has_flag(.option) || node.expr_type.has_flag(.result))
 	if is_opt_or_res {
 		opt_base_typ := g.base_type(node.expr_type)
-		g.writeln('(*(${opt_base_typ}*)')
+		g.write('(*(${opt_base_typ}*)')
 	}
 	if sym.kind in [.interface_, .sum_type] {
 		g.write('(*(')
@@ -4142,7 +4127,7 @@ fn (mut g Gen) ident(node ast.Ident) {
 				stmt_str := g.go_before_stmt(0).trim_space()
 				g.empty_line = true
 				g.or_block(name, node.or_expr, node.info.typ)
-				g.writeln(stmt_str)
+				g.write(stmt_str)
 			}
 			return
 		}
@@ -4344,7 +4329,12 @@ fn (mut g Gen) gen_result_error(target_type ast.Type, expr ast.Expr) {
 fn (mut g Gen) gen_option_error(target_type ast.Type, expr ast.Expr) {
 	styp := g.typ(g.unwrap_generic(target_type))
 	g.write('(${styp}){ .state=2, .err=')
-	g.expr(expr)
+	if target_type.has_flag(.option) && expr is ast.Ident
+		&& (expr as ast.Ident).or_expr.kind == .propagate_option {
+		g.expr(ast.None{}) // option type unwrapping error
+	} else {
+		g.expr(expr)
+	}
 	g.write(', .data={EMPTY_STRUCT_INITIALIZATION} }')
 }
 
@@ -4702,7 +4692,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 			}
 			if g.table.sym(mr_info.types[i]).kind in [.sum_type, .interface_] {
 				g.expr_with_cast(expr, node.types[i], mr_info.types[i])
-			} else if mr_info.types[i].has_flag(.option) && !node.types[i].has_flag(.option) {
+			} else if mr_info.types[i].has_flag(.option) {
 				g.expr_with_opt(expr, node.types[i], mr_info.types[i])
 			} else {
 				g.expr(expr)
@@ -4790,7 +4780,11 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 				}
 			}
 			for i, expr in node.exprs {
-				g.expr_with_cast(expr, node.types[i], fn_ret_type.clear_flag(.result))
+				if fn_ret_type.has_flag(.option) {
+					g.expr_with_opt(expr, node.types[i], fn_ret_type.clear_flag(.result))
+				} else {
+					g.expr_with_cast(expr, node.types[i], fn_ret_type.clear_flag(.result))
+				}
 				if i < node.exprs.len - 1 {
 					g.write(', ')
 				}
@@ -4837,6 +4831,8 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 			if g.fn_decl.return_type.is_ptr() {
 				var_str := g.expr_string(expr0)
 				g.write(var_str.trim('&'))
+			} else if g.fn_decl.return_type.has_flag(.option) {
+				g.expr_with_opt(expr0, node.types[0], g.fn_decl.return_type)
 			} else if g.table.sym(g.fn_decl.return_type).kind in [.sum_type, .interface_] {
 				g.expr_with_cast(expr0, node.types[0], g.fn_decl.return_type)
 			} else {

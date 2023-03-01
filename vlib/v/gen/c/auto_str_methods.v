@@ -558,7 +558,13 @@ fn (mut g Gen) gen_str_for_array(info ast.Array, styp string, str_fn_name string
 		}
 		if should_use_indent_func(sym.kind) && !sym_has_str_method {
 			if is_elem_ptr {
-				g.auto_str_funcs.writeln('\t\tstring x = indent_${elem_str_fn_name}(*it, indent_count);')
+				deref, deref_label := deref_kind(str_method_expects_ptr, is_elem_ptr,
+					typ)
+				g.auto_str_funcs.writeln('\t\tstring x = _SLIT("nil");')
+				g.auto_str_funcs.writeln('\t\tif (it != 0) {')
+				g.auto_str_funcs.writeln('\t\t\tstrings__Builder_write_string(&sb, _SLIT("${deref_label}"));')
+				g.auto_str_funcs.writeln('\t\t\tx = ${elem_str_fn_name}(${deref}it);')
+				g.auto_str_funcs.writeln('\t\t}')
 			} else {
 				g.auto_str_funcs.writeln('\t\tstring x = indent_${elem_str_fn_name}(it, indent_count);')
 			}
@@ -899,7 +905,7 @@ fn (mut g Gen) gen_str_for_struct(info ast.Struct, styp string, typ_str string, 
 		mut field_styp := sftyp.replace('*', '')
 		field_styp_fn_name := if sym_has_str_method {
 			mut field_fn_name := if ftyp_noshared.has_flag(.option) {
-				'${field_styp}_str'
+				g.get_str_fn(ftyp_noshared)
 			} else {
 				left_cc_type := g.cc_type(ftyp_noshared, false)
 				left_fn_name := util.no_dots(left_cc_type)
@@ -989,7 +995,8 @@ fn struct_auto_str_func(sym &ast.TypeSymbol, _field_type ast.Type, fn_name strin
 		}
 		return 'indent_${fn_name}(${obj}, indent_count + 1)', true
 	} else if sym.kind == .function {
-		return '${fn_name}()', true
+		obj := '${deref}it.${c_name(field_name)}${sufix}'
+		return '${fn_name}(${obj})', true
 	} else if sym.kind == .chan {
 		return '${fn_name}(${deref}it.${c_name(field_name)}${sufix})', true
 	} else {
